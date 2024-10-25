@@ -22,15 +22,15 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #![allow(clippy::uninlined_format_args)]
 
 use fish::{
-    ast::Ast,
+    ast::Ast,  // abstract syntax tree 抽象语法树
     builtins::shared::{
         BUILTIN_ERR_MISSING, BUILTIN_ERR_UNKNOWN, STATUS_CMD_OK, STATUS_CMD_UNKNOWN,
-    },
+    }, // 内置命令错误信息与命令状态值           
     common::{
         escape, get_executable_path, restore_term_foreground_process_group_for_exit,
         save_term_foreground_process_group, scoped_push_replacer, str2wcstring, wcs2string,
         ScopeGuard, PACKAGE_NAME, PROFILING_ACTIVE, PROGRAM_NAME,
-    },
+    },  // 各种功能的原型，主要涉及string的用法
     env::{
         environment::{env_init, EnvStack, Environment},
         ConfigPaths, EnvMode, Statuses,
