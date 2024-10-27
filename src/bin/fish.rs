@@ -25,41 +25,42 @@ use fish::{
     ast::Ast,  // abstract syntax tree 抽象语法树
     builtins::shared::{
         BUILTIN_ERR_MISSING, BUILTIN_ERR_UNKNOWN, STATUS_CMD_OK, STATUS_CMD_UNKNOWN,
-    }, // 内置命令错误信息与命令状态值           
+    }, // 内置命令的错误信息与命令状态值           
     common::{
         escape, get_executable_path, restore_term_foreground_process_group_for_exit,
         save_term_foreground_process_group, scoped_push_replacer, str2wcstring, wcs2string,
         ScopeGuard, PACKAGE_NAME, PROFILING_ACTIVE, PROGRAM_NAME,
-    },  // 各种功能的原型，主要涉及string的用法
+    },  // 各种functions的原型，主要涉及string的用法
     env::{
         environment::{env_init, EnvStack, Environment},
         ConfigPaths, EnvMode, Statuses,
-    },
-    eprintf,
-    event::{self, Event},
-    flog::{self, activate_flog_categories_by_pattern, set_flog_file_fd, FLOG, FLOGF},
+    },  // 环境变量相关模块（mod）
+    eprintf,  // error打印
+    event::{self, Event},  // 事件处理的相关函数，主要涉及signal的处理程序
+    flog::{self, activate_flog_categories_by_pattern, set_flog_file_fd, FLOG, FLOGF},  // 日志记录功能
     fprintf, function, future_feature_flags as features,
-    history::{self, start_private_mode},
+    history::{self, start_private_mode},  // 历史记录功能
     io::IoChain,
-    nix::{getpid, isatty},
-    panic::panic_handler,
+    nix::{getpid, isatty},  // Unix-like系统API的封装mod
+    panic::panic_handler,  // rust的panic处理       
     parse_constants::{ParseErrorList, ParseTreeFlags},
     parse_tree::ParsedSource,
     parse_util::parse_util_detect_errors_in_ast,
-    parser::{BlockType, CancelBehavior, Parser},
-    path::path_get_config,
+    parser::{BlockType, CancelBehavior, Parser},  // 代码解析器
+    path::path_get_config,  // 寻找用户config文件的路径（path）
     printf,
     proc::{
         get_login, is_interactive_session, mark_login, mark_no_exec, proc_init,
         set_interactive_session,
-    },
-    reader::{reader_init, reader_read, term_copy_modes},
-    signal::{signal_clear_cancel, signal_unblock_all},
-    threads::{self},
-    topic_monitor,
-    wchar::prelude::*,
-    wutil::waccess,
+    },  // 用于跟踪和管理作业（jobs）、进程和子shell，还包含用于跟踪子进程的信号处理的函数
+    reader::{reader_init, reader_read, term_copy_modes},  // 从标准输入读取数据到paser
+    signal::{signal_clear_cancel, signal_unblock_all},  // 信号相关mod
+    threads::{self},  // rust版本的‘pthread’
+    topic_monitor,  // 主题监控器，一个主题就是“某个可能发生的事”，比如一个进程的结束
+    wchar::prelude::*,  // 宽字符串(wide string)
+    wutil::waccess,  // 宽字符版本的access函数
 };
+// rust标准库中的一些函数
 use std::ffi::{CString, OsStr, OsString};
 use std::fs::File;
 use std::mem::MaybeUninit;
@@ -75,6 +76,7 @@ const DATA_DIR: &str = env!("DATADIR");
 const SYSCONF_DIR: &str = env!("SYSCONFDIR");
 const BIN_DIR: &str = env!("BINDIR");
 
+// 用于存储命令行指定的选项
 /// container to hold the options specified within the command line
 #[derive(Default, Debug)]
 struct FishCmdOpts {
@@ -103,6 +105,7 @@ struct FishCmdOpts {
     enable_private_mode: bool,
 }
 
+// 时间体结构
 /// Return a timeval converted to milliseconds.
 #[allow(clippy::unnecessary_cast)]
 fn tv_to_msec(tv: &libc::timeval) -> i64 {
@@ -113,6 +116,8 @@ fn tv_to_msec(tv: &libc::timeval) -> i64 {
     msec
 }
 
+
+/// 通过调用getrusage（c语言）来获取当前进程的资源统计信息，并使用标准化格式打印
 fn print_rusage_self() {
     let mut rs = MaybeUninit::uninit();
     if unsafe { libc::getrusage(libc::RUSAGE_SELF, rs.as_mut_ptr()) } != 0 {
@@ -142,6 +147,7 @@ fn print_rusage_self() {
     eprintln!("        signals: {signals}");
 }
 
+/// 动态确定配置目录的位置
 fn determine_config_directory_paths(argv0: impl AsRef<Path>) -> ConfigPaths {
     // PORTING: why is this not just an associated method on ConfigPaths?
 
@@ -268,7 +274,7 @@ fn read_init(parser: &Parser, paths: &ConfigPaths) {
         // something is wrong.
         // That also means that our functions won't be found,
         // and so any config we get would almost certainly be broken.
-        let escaped_pathname = escape(&datapath);
+        let escaped_pathname = escape(&datapath);  // 对路径名进行转义处理
         FLOGF!(
             error,
             "Fish cannot find its asset files in '%ls'. Refusing to read configuration.",
@@ -276,16 +282,17 @@ fn read_init(parser: &Parser, paths: &ConfigPaths) {
         );
         return;
     }
-    source_config_in_directory(parser, &str2wcstring(paths.sysconf.as_os_str().as_bytes()));
+    source_config_in_directory(parser, &str2wcstring(paths.sysconf.as_os_str().as_bytes()));  // 从系统配置目录（sysconf）中加载配置文件
 
     // We need to get the configuration directory before we can source the user configuration file.
     // If path_get_config returns false then we have no configuration directory and no custom config
     // to load.
     if let Some(config_dir) = path_get_config() {
-        source_config_in_directory(parser, &config_dir);
+        source_config_in_directory(parser, &config_dir);  // 从用户配置目录中加载配置文件
     }
 }
 
+/// 逐个执行命令并返回命令的状态
 fn run_command_list(parser: &Parser, cmds: &[OsString]) -> i32 {
     let mut retval = STATUS_CMD_OK;
     for cmd in cmds {
@@ -297,12 +304,12 @@ fn run_command_list(parser: &Parser, cmds: &[OsString]) -> i32 {
             parse_util_detect_errors_in_ast(&ast, &cmd_wcs, Some(&mut errors)).is_err()
         };
 
-        if !errored {
+        if !errored {  // 命令没有错误，执行
             // Construct a parsed source ref.
             let ps = Arc::new(ParsedSource::new(cmd_wcs, ast));
             let _ = parser.eval_parsed_source(&ps, &IoChain::new(), None, BlockType::top);
             retval = STATUS_CMD_OK;
-        } else {
+        } else {  // 命令存在错误
             let backtrace = parser.get_backtrace(&cmd_wcs, &errors);
             eprintf!("%s", backtrace);
             // XXX: Why is this the return for "unknown command"?
@@ -313,9 +320,11 @@ fn run_command_list(parser: &Parser, cmds: &[OsString]) -> i32 {
     retval.unwrap()
 }
 
+/// 解析命令行选项，并存入FishCmdOpts中
 fn fish_parse_opt(args: &mut [WString], opts: &mut FishCmdOpts) -> ControlFlow<i32, usize> {
-    use fish::wgetopt::{wopt, ArgType::*, WGetopter, WOption};
+    use fish::wgetopt::{wopt, ArgType::*, WGetopter, WOption};  // rust重写的getopt函数
 
+    // 定义常量和选项
     const RUSAGE_ARG: char = 1 as char;
     const PRINT_DEBUG_CATEGORIES_ARG: char = 2 as char;
     const PROFILE_STARTUP_ARG: char = 3 as char;
@@ -347,7 +356,7 @@ fn fish_parse_opt(args: &mut [WString], opts: &mut FishCmdOpts) -> ControlFlow<i
 
     let mut shim_args: Vec<&wstr> = args.iter().map(|s| s.as_ref()).collect();
     let mut w = WGetopter::new(SHORT_OPTS, LONG_OPTS, &mut shim_args);
-    while let Some(c) = w.next_opt() {
+    while let Some(c) = w.next_opt() {  // 各个选项的处理
         match c {
             'c' => opts
                 .batch_cmds
@@ -445,11 +454,12 @@ fn fish_parse_opt(args: &mut [WString], opts: &mut FishCmdOpts) -> ControlFlow<i
     ControlFlow::Continue(optind)
 }
 
+// 主函数，程序入口
 fn main() {
     PROGRAM_NAME.set(L!("fish")).unwrap();
     if !cfg!(small_main_stack) {
-        panic_handler(throwing_main);
-    } else {
+        panic_handler(throwing_main);  // 如果栈空间较大，直接在当前线程上运行
+    } else {  // 栈空间较小，创建新线程运行
         // Create a new thread with a decent stack size to be our main thread
         std::thread::scope(|scope| {
             scope.spawn(|| panic_handler(throwing_main));
@@ -457,7 +467,9 @@ fn main() {
     }
 }
 
+/// 程序的实际逻辑
 fn throwing_main() -> i32 {
+    // 获取参数
     let mut args: Vec<WString> = env::args_os()
         .map(|osstr| str2wcstring(osstr.as_bytes()))
         .collect();
@@ -475,6 +487,7 @@ fn throwing_main() -> i32 {
         }
     }
 
+    // 参数为空时压入“fish”进入参数，提高程序健壮性
     if args.is_empty() {
         args.push("fish".into());
     }
@@ -486,6 +499,7 @@ fn throwing_main() -> i32 {
         activate_flog_categories_by_pattern(&s);
     }
 
+    // 调用fish_parse_opt函数，解析启动fish程序时的选项
     let mut opts = FishCmdOpts::default();
     let mut my_optind = match fish_parse_opt(&mut args, &mut opts) {
         ControlFlow::Continue(optind) => optind,
@@ -510,7 +524,7 @@ fn throwing_main() -> i32 {
                 // Rust sets O_CLOEXEC by default
                 // https://github.com/rust-lang/rust/blob/07438b0928c6691d6ee734a5a77823ec143be94d/library/std/src/sys/unix/fs.rs#L1059
                 set_flog_file_fd(dbg_file.into_raw_fd());
-            }
+            }  // 错误处理      
             Err(e) => {
                 // TODO: should not be debug-print
                 eprintln!("Could not open file {:?}", debug_path);
@@ -530,6 +544,7 @@ fn throwing_main() -> i32 {
     }
 
     // Apply our options
+    // 将命令选项实现
     if opts.is_login {
         mark_login();
     }
@@ -546,7 +561,7 @@ fn throwing_main() -> i32 {
     // Only save (and therefore restore) the fg process group if we are interactive. See issues
     // #197 and #1002.
     if is_interactive_session() {
-        save_term_foreground_process_group();
+        save_term_foreground_process_group();  // 仅存储前台进程组
     }
 
     let mut paths: Option<ConfigPaths> = None;
@@ -567,10 +582,10 @@ fn throwing_main() -> i32 {
     // command line takes precedence).
     if let Some(features_var) = EnvStack::globals().get(L!("fish_features")) {
         for s in features_var.as_list() {
-            features::set_from_string(s.as_utfstr());
+            features::set_from_string(s.as_utfstr());  // 设置环境中的功能
         }
     }
-    features::set_from_string(opts.features.as_utfstr());
+    features::set_from_string(opts.features.as_utfstr());  // 设置命令行中的功能
     proc_init();
     fish::env::misc_init();
     let _restore_term_foreground_process_group =
@@ -578,6 +593,7 @@ fn throwing_main() -> i32 {
     let _restore_term = reader_init();
 
     // Construct the root parser!
+    // 构建命令解析器
     let env = Rc::new(EnvStack::globals().create_child(true /* dispatches_var_changes */));
     let parser: &Parser = &Parser::new(env, CancelBehavior::Clear);
     parser.set_syncs_uvars(!opts.no_config);
@@ -616,6 +632,7 @@ fn throwing_main() -> i32 {
     PROFILING_ACTIVE.store(opts.profile_output.is_some());
 
     // Run post-config commands specified as arguments, if any.
+    // 后配置命令
     if !opts.postconfig_cmds.is_empty() {
         res = run_command_list(parser, &opts.postconfig_cmds);
     }
@@ -625,6 +642,7 @@ fn throwing_main() -> i32 {
 
     if !opts.batch_cmds.is_empty() {
         // Run the commands specified as arguments, if any.
+        // 执行命令行语句中的可执行命令
         if get_login() {
             // Do something nasty to support OpenSUSE assuming we're bash. This may modify cmds.
             fish_xdm_login_hack_hack_hack_hack(&mut opts.batch_cmds, &args[my_optind..]);
@@ -642,6 +660,7 @@ fn throwing_main() -> i32 {
         parser.libdata_mut().exit_current_script = false;
     } else if my_optind == args.len() {
         // Implicitly interactive mode.
+        // 隐式交互模式，比如命令‘$ fish’直接进入交互模式
         if opts.no_exec && isatty(libc::STDIN_FILENO) {
             FLOG!(
                 error,
@@ -651,13 +670,13 @@ fn throwing_main() -> i32 {
             return libc::EXIT_FAILURE;
         }
         res = reader_read(parser, libc::STDIN_FILENO, &IoChain::new());
-    } else {
+    } else {  // 非交互模式，执行脚本文件
         let n = wcs2string(&args[my_optind]);
         let path = OsStr::from_bytes(&n);
         my_optind += 1;
         // Rust sets cloexec by default, see above
         // We don't need autoclose_fd_t when we use File, it will be closed on drop.
-        match File::open(path) {
+        match File::open(path) {  // 尝试打开脚本文件
             Err(e) => {
                 FLOGF!(
                     error,
@@ -680,6 +699,7 @@ fn throwing_main() -> i32 {
                     },
                     Some(Arc::new(rel_filename.to_owned())),
                 );
+                // 从脚本文件中读取命令
                 res = reader_read(parser, f.as_raw_fd(), &IoChain::new());
                 if res != 0 {
                     FLOGF!(
@@ -692,12 +712,14 @@ fn throwing_main() -> i32 {
         }
     }
 
+    // 确定fish程序退出状态
     let exit_status = if res != 0 {
         STATUS_CMD_UNKNOWN.unwrap()
     } else {
         parser.get_last_status()
     };
 
+    // 触发退出事件
     event::fire(parser, Event::process_exit(getpid(), exit_status));
 
     // Trigger any exit handlers.
@@ -711,8 +733,8 @@ fn throwing_main() -> i32 {
         parser.emit_profiling(&profile_output);
     }
 
-    history::save_all();
-    if opts.print_rusage_self {
+    history::save_all();  // 更新历史记录
+    if opts.print_rusage_self {  // 如果必要，在退出时输出资源利用率
         print_rusage_self();
     }
 
@@ -720,6 +742,7 @@ fn throwing_main() -> i32 {
 }
 
 // https://github.com/fish-shell/fish-shell/issues/367
+// 解决github上的issue，修复一些（两个）bugs
 fn escape_single_quoted_hack_hack_hack_hack(s: &wstr) -> OsString {
     let mut result = OsString::with_capacity(s.len() + 2);
     result.push("\'");
